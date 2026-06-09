@@ -33,7 +33,8 @@ log = logging.getLogger("train")
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "artifacts")
 Path(ARTIFACT_DIR).mkdir(parents=True, exist_ok=True)
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "processed", "microgrid_2024.parquet")
+DATA_DIR = Path(os.getenv("AEGIS_DATA_DIR", Path(__file__).resolve().parents[2] / "data")).resolve()
+DATA_PATH = DATA_DIR / "processed" / "microgrid_2024.parquet"
 LEGACY_CSV = os.path.join(os.path.dirname(__file__), "..", "..", "..", "project", "data.csv")
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -49,7 +50,7 @@ class SequenceDataset(Dataset):
         self.horizon = horizon
 
     def __len__(self):
-        return len(self.X) - self.seq_len - self.horizon + 1
+        return max(0, len(self.X) - self.seq_len - self.horizon + 1)
 
     def __getitem__(self, idx):
         x_seq = self.X[idx : idx + self.seq_len]
@@ -73,8 +74,14 @@ def train_tcn(df: pd.DataFrame, args) -> dict:
     train_ds = SequenceDataset(X[:split],  y[:split],  args.seq_len, args.horizon)
     val_ds   = SequenceDataset(X[split:],  y[split:],  args.seq_len, args.horizon)
 
-    train_loader = DataLoader(train_ds, batch_size=64, shuffle=True,  num_workers=0)
-    val_loader   = DataLoader(val_ds,   batch_size=64, shuffle=False, num_workers=0)
+    if len(train_ds) <= 0 or len(val_ds) <= 0:
+        raise ValueError(
+            f"Not enough rows for seq_len={args.seq_len} and horizon={args.horizon}; "
+            f"got train={len(train_ds)} val={len(val_ds)}"
+        )
+
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=0)
+    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     model     = AEGISForecaster(input_size=len(feature_cols), horizon=args.horizon).to(DEVICE)
     criterion = PinballLoss()
@@ -146,14 +153,14 @@ def train_tcn(df: pd.DataFrame, args) -> dict:
     return meta
 
 
-def train_baseline_rf(df: pd.DataFrame) -> dict:
+def train_baseline_rf(df: pd.DataFrame, n_estimators: int = 100) -> dict:
     """Train legacy RandomForest (baseline for paper comparison)."""
     feature_cols = get_feature_columns(df, "load_kw")
     X = df[feature_cols].values
     y = df["load_kw"].values
     split = int(len(X) * 0.8)
 
-    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    model = RandomForestRegressor(n_estimators=n_estimators, random_state=42, n_jobs=-1)
     model.fit(X[:split], y[:split])
     preds = model.predict(X[split:])
 
@@ -176,6 +183,10 @@ def main():
     parser.add_argument("--epochs",  type=int, default=50)
     parser.add_argument("--seq-len", type=int, default=60)
     parser.add_argument("--horizon", type=int, default=24)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--max-rows", type=int, default=None, help="Limit rows for smoke/CI training")
+    parser.add_argument("--skip-baseline", action="store_true", help="Skip RandomForest baseline training")
+    parser.add_argument("--rf-estimators", type=int, default=100)
     args = parser.parse_args()
 
     # Prefer digital-twin data, fall back to legacy CSV
@@ -183,9 +194,18 @@ def main():
     log.info("Using data: %s", data_path)
 
     df = load_dataframe(data_path)
+    if args.max_rows is not None:
+        min_required = args.seq_len + args.horizon + 2
+        if args.max_rows < min_required:
+            raise ValueError(f"--max-rows must be at least {min_required}")
+        df = df.head(args.max_rows).copy()
+        log.info("Using first %d rows for bounded training run", len(df))
 
-    log.info("=== Training baseline RandomForest ===")
-    rf_meta = train_baseline_rf(df)
+    if args.skip_baseline:
+        rf_meta = {"skipped": True}
+    else:
+        log.info("=== Training baseline RandomForest ===")
+        rf_meta = train_baseline_rf(df, n_estimators=args.rf_estimators)
 
     log.info("=== Training TCN + Attention Forecaster ===")
     tcn_meta = train_tcn(df, args)

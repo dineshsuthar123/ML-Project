@@ -24,7 +24,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("train-agent")
 
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "artifacts")
-DATA_PATH    = os.path.join(os.path.dirname(__file__), "..", "..", "data", "processed", "microgrid_2024.parquet")
+DATA_DIR     = Path(os.getenv("AEGIS_DATA_DIR", Path(__file__).resolve().parents[2] / "data")).resolve()
+DATA_PATH    = DATA_DIR / "processed" / "microgrid_2024.parquet"
 Path(ARTIFACT_DIR).mkdir(parents=True, exist_ok=True)
 
 
@@ -33,7 +34,7 @@ def make_env():
     return Monitor(env)
 
 
-def train(timesteps: int = 300_000):
+def train(timesteps: int = 300_000, progress_bar: bool = False):
     train_env = make_vec_env(make_env, n_envs=4)
     eval_env  = make_env()
 
@@ -68,7 +69,7 @@ def train(timesteps: int = 300_000):
     ]
 
     log.info("Training SAC for %d timesteps ...", timesteps)
-    model.learn(total_timesteps=timesteps, callback=callbacks, progress_bar=True)
+    model.learn(total_timesteps=timesteps, callback=callbacks, progress_bar=progress_bar)
 
     final_path = os.path.join(ARTIFACT_DIR, "sac_final")
     model.save(final_path)
@@ -95,6 +96,7 @@ def train(timesteps: int = 300_000):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--timesteps", type=int, default=300_000)
+    parser.add_argument("--progress-bar", action="store_true")
     args = parser.parse_args()
-    train(args.timesteps)
+    train(args.timesteps, progress_bar=args.progress_bar)
 

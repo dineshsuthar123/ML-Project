@@ -39,6 +39,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("anomaly-service")
 
 ARTIFACT_DIR    = os.getenv("ARTIFACT_DIR", "artifacts")
+DATA_DIR        = Path(os.getenv("AEGIS_DATA_DIR", Path(__file__).resolve().parents[2] / "data")).resolve()
 DB_DSN = (
     f"postgresql://{os.getenv('POSTGRES_USER','aegis')}:"
     f"{os.getenv('POSTGRES_PASSWORD','aegis_secret')}@"
@@ -79,7 +80,7 @@ def _train_vae_on_normal_data():
     _vae    = GridVAE(input_dim=len(VAE_FEATURES)).to(DEVICE)
     _scaler = StandardScaler()
 
-    parquet = Path("../../data/processed/microgrid_2024.parquet")
+    parquet = DATA_DIR / "processed" / "microgrid_2024.parquet"
     if not parquet.exists():
         log.warning("No parquet found; VAE will use random weights.")
         _vae.threshold = 1.0

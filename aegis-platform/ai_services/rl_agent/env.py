@@ -115,7 +115,7 @@ class MicrogridEnv(gym.Env):
         return self._obs(load, solar, price, hour), {}
 
     def step(self, action: np.ndarray):
-        action = float(np.clip(action, -1.0, 1.0))
+        action = float(np.clip(np.asarray(action, dtype=np.float32).reshape(-1)[0], -1.0, 1.0))
         load, solar, price, hour = self._get_context()
 
         # Power balance (positive = charging battery)
