@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8000']
+    metrics_path: /metrics
+
+  - job_name: 'forecasting'
+    static_configs:
+      - targets: ['forecasting:8001']
+    metrics_path: /metrics
+
+  - job_name: 'anomaly-detection'
+    static_configs:
+      - targets: ['anomaly:8002']
+    metrics_path: /metrics
+
+  - job_name: 'rl-agent'
+    static_configs:
+      - targets: ['rl-agent:8003']
+    metrics_path: /metrics
+
+  - job_name: 'demand-response'
+    static_configs:
+      - targets: ['demand-response:8004']
+    metrics_path: /metrics
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
