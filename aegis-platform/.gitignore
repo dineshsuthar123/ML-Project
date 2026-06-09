@@ -13,4 +13,8 @@ htmlcov/
 backups/model_artifacts/*.pt
 backups/model_artifacts/*.pkl
 backups/model_artifacts/*.zip
+backups/model_artifacts/forecaster_meta.json
+backups/model_artifacts/baseline_rf_meta.json
+backups/model_artifacts/checkpoints/
+backups/model_artifacts/tb_logs/
 data/processed/*.parquet

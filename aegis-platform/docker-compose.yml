@@ -1,5 +1,4 @@
-﻿version: "3.9"
-# ============================================================
+﻿# ============================================================
 # AEGIS – Docker Compose (all free / open-source services)
 # ============================================================
 
@@ -152,6 +151,8 @@ services:
       timescaledb:
         condition: service_healthy
     env_file: .env
+    environment:
+      AEGIS_DATA_DIR: /app/data
     volumes: ["./data:/app/data"]
     command: python generate_digital_twin.py
     restart: "no"
@@ -202,7 +203,11 @@ services:
       minio:
         condition: service_healthy
     env_file: .env
-    volumes: ["./backups/model_artifacts:/app/artifacts"]
+    environment:
+      AEGIS_DATA_DIR: /app/data
+    volumes:
+      - "./backups/model_artifacts:/app/artifacts"
+      - "./data:/app/data"
     command: uvicorn serve:app --host 0.0.0.0 --port 8001
 
   # ── AI: Anomaly Detection ──────────────────────────────────
@@ -219,7 +224,11 @@ services:
       kafka:
         condition: service_healthy
     env_file: .env
-    volumes: ["./backups/model_artifacts:/app/artifacts"]
+    environment:
+      AEGIS_DATA_DIR: /app/data
+    volumes:
+      - "./backups/model_artifacts:/app/artifacts"
+      - "./data:/app/data"
     command: uvicorn serve:app --host 0.0.0.0 --port 8002
 
   # ── AI: RL Battery Agent ───────────────────────────────────
@@ -236,7 +245,11 @@ services:
       minio:
         condition: service_healthy
     env_file: .env
-    volumes: ["./backups/model_artifacts:/app/artifacts"]
+    environment:
+      AEGIS_DATA_DIR: /app/data
+    volumes:
+      - "./backups/model_artifacts:/app/artifacts"
+      - "./data:/app/data"
     command: uvicorn policy_server:app --host 0.0.0.0 --port 8003
 
   # ── AI: Demand Response ────────────────────────────────────

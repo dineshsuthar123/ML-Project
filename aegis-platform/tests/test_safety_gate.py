@@ -1,4 +1,5 @@
 from safety_gate import apply_safety_gate
+from env import MicrogridEnv
 
 
 def test_low_soc_blocks_discharge():
@@ -23,4 +24,17 @@ def test_ramp_limit_scales_action_down():
     assert result.approved is False
     assert result.final_action < 0.8
     assert any("RAMP_LIMIT" in violation for violation in result.violations)
+
+
+def test_microgrid_env_accepts_vector_action_from_sb3():
+    env = MicrogridEnv(max_steps=2)
+    env.reset(seed=42)
+
+    obs, reward, terminated, truncated, info = env.step([0.25])
+
+    assert obs.shape == (6,)
+    assert isinstance(float(reward), float)
+    assert terminated is False
+    assert truncated is False
+    assert info["action"] == 0.25
 

@@ -19,6 +19,7 @@ import random
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,8 @@ log = logging.getLogger("digital-twin")
 # ── Configuration ────────────────────────────────────────────
 START_DATE = os.getenv("SIMULATION_START_DATE", "2024-01-01")
 END_DATE   = os.getenv("SIMULATION_END_DATE",   "2024-12-31")
+DATA_DIR   = Path(os.getenv("AEGIS_DATA_DIR", Path(__file__).resolve().parent)).resolve()
+PARQUET_PATH = DATA_DIR / "processed" / "microgrid_2024.parquet"
 DB_DSN     = (
     f"postgresql://{os.getenv('POSTGRES_USER','aegis')}:"
     f"{os.getenv('POSTGRES_PASSWORD','aegis_secret')}@"
@@ -221,16 +224,14 @@ def save_parquet(records: list):
     """Save records to Parquet file for AI training."""
     df = pd.DataFrame(records)
     df["time"] = pd.to_datetime(df["time"])
-    # Save to the mounted data volume at /app/data/processed/
-    out_path = os.path.join(os.path.dirname(__file__), "data", "processed", "microgrid_2024.parquet")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    df.to_parquet(out_path, index=False)
-    log.info("Saved Parquet to %s  (shape=%s)", out_path, df.shape)
+    PARQUET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(PARQUET_PATH, index=False)
+    log.info("Saved Parquet to %s  (shape=%s)", PARQUET_PATH, df.shape)
 
 
 async def main():
-    parquet_path = os.path.join(os.path.dirname(__file__), "data", "processed", "microgrid_2024.parquet")
-    if os.path.exists(parquet_path):
+    parquet_path = PARQUET_PATH
+    if parquet_path.exists():
         log.info("Parquet already exists at %s — loading from disk.", parquet_path)
         import pandas as _pd
         records_df = _pd.read_parquet(parquet_path)
