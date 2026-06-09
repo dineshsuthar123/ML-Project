@@ -1,0 +1,304 @@
+﻿version: "3.9"
+# ============================================================
+# AEGIS – Docker Compose (all free / open-source services)
+# ============================================================
+
+networks:
+  aegis-net:
+    driver: bridge
+
+volumes:
+  timescaledb_data:
+  redis_data:
+  minio_data:
+  kafka_data:
+  grafana_data:
+  prometheus_data:
+
+services:
+
+  # ── Kafka (KRaft, no ZooKeeper) ────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka
+    container_name: aegis-kafka
+    networks: [aegis-net]
+    ports: ["9092:9092"]
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: aegis-kafka-init
+    networks: [aegis-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor.raw --partitions 4 --replication-factor 1 &&
+       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor.features --partitions 4 --replication-factor 1 &&
+       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic forecast.output --partitions 2 --replication-factor 1 &&
+       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic anomaly.alerts --partitions 2 --replication-factor 1 &&
+       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic control.commands --partitions 2 --replication-factor 1 &&
+       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic rl.actions --partitions 2 --replication-factor 1 &&
+       echo 'Topics ready.'"
+    restart: "no"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: aegis-kafka-ui
+    networks: [aegis-net]
+    ports: ["8080:8080"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: aegis
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+
+  # ── TimescaleDB ────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: aegis-timescaledb
+    networks: [aegis-net]
+    ports: ["5432:5432"]
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aegis}
+      POSTGRES_USER: ${POSTGRES_USER:-aegis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegis_secret}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aegis} -d ${POSTGRES_DB:-aegis}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: aegis-redis
+    networks: [aegis-net]
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MinIO ──────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: aegis-minio
+    networks: [aegis-net]
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio_data:/data]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: aegis-minio-init
+    networks: [aegis-net]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "mc alias set local http://minio:9000 minioadmin minioadmin &&
+       mc mb --ignore-existing local/aegis-models &&
+       mc mb --ignore-existing local/aegis-data &&
+       echo 'MinIO ready.'"
+    restart: "no"
+
+  # ── Digital Twin Generator (one-shot) ─────────────────────
+  digital-twin:
+    build:
+      context: ./data
+      dockerfile: Dockerfile
+    container_name: aegis-digital-twin
+    networks: [aegis-net]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file: .env
+    volumes: ["./data:/app/data"]
+    command: python generate_digital_twin.py
+    restart: "no"
+
+  # ── Sensor Simulator ───────────────────────────────────────
+  sensor-simulator:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: aegis-sensor-simulator
+    networks: [aegis-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      digital-twin:
+        condition: service_completed_successfully
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    command: python sensor_simulator.py
+
+  # ── Stream Processor ───────────────────────────────────────
+  stream-processor:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: aegis-stream-processor
+    networks: [aegis-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    command: python stream_processors/feature_engineering.py
+
+  # ── AI: Forecasting ────────────────────────────────────────
+  forecasting:
+    build:
+      context: ./ai_services/forecasting
+      dockerfile: Dockerfile
+    container_name: aegis-forecasting
+    networks: [aegis-net]
+    ports: ["8001:8001"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: .env
+    volumes: ["./backups/model_artifacts:/app/artifacts"]
+    command: uvicorn serve:app --host 0.0.0.0 --port 8001
+
+  # ── AI: Anomaly Detection ──────────────────────────────────
+  anomaly:
+    build:
+      context: ./ai_services/anomaly_detection
+      dockerfile: Dockerfile
+    container_name: aegis-anomaly
+    networks: [aegis-net]
+    ports: ["8002:8002"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    volumes: ["./backups/model_artifacts:/app/artifacts"]
+    command: uvicorn serve:app --host 0.0.0.0 --port 8002
+
+  # ── AI: RL Battery Agent ───────────────────────────────────
+  rl-agent:
+    build:
+      context: ./ai_services/rl_agent
+      dockerfile: Dockerfile
+    container_name: aegis-rl-agent
+    networks: [aegis-net]
+    ports: ["8003:8003"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: .env
+    volumes: ["./backups/model_artifacts:/app/artifacts"]
+    command: uvicorn policy_server:app --host 0.0.0.0 --port 8003
+
+  # ── AI: Demand Response ────────────────────────────────────
+  demand-response:
+    build:
+      context: ./ai_services/demand_response
+      dockerfile: Dockerfile
+    container_name: aegis-demand-response
+    networks: [aegis-net]
+    ports: ["8004:8004"]
+    env_file: .env
+    command: uvicorn serve:app --host 0.0.0.0 --port 8004
+
+  # ── API Gateway ────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ./api_gateway
+      dockerfile: Dockerfile
+    container_name: aegis-api-gateway
+    networks: [aegis-net]
+    ports: ["8000:8000"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  # ── Frontend ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: aegis-frontend
+    networks: [aegis-net]
+    ports: ["3000:80"]
+    depends_on: [api-gateway]
+
+  # ── Prometheus ─────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aegis-prometheus
+    networks: [aegis-net]
+    ports: ["9090:9090"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command: --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
+
+  # ── Grafana ────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aegis-grafana
+    networks: [aegis-net]
+    ports: ["3001:3000"]
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana_dashboards:/var/lib/grafana/dashboards
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    depends_on: [prometheus]
