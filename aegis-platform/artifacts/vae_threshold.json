@@ -1,0 +1,13 @@
+{
+  "threshold": 1.0838902544975273,
+  "features": [
+    "voltage_pu",
+    "frequency_hz",
+    "load_kw",
+    "solar_kw",
+    "battery_soc",
+    "temperature",
+    "humidity",
+    "wind_speed"
+  ]
+}

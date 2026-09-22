@@ -110,7 +110,7 @@ export function OperatorOverride() {
         {cmdErr    && <Alert severity="error">{cmdErr}</Alert>}
         {cmdResult && (
           <Alert severity="success">
-            Command dispatched at {cmdResult.time?.slice(11, 19)} by {cmdResult.operator}
+            Command queued for safety validation at {cmdResult.time?.slice(11, 19)} by {cmdResult.operator}
           </Alert>
         )}
       </Stack>

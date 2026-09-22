@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 import redis.asyncio as aioredis
+from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -82,6 +83,18 @@ async def lifespan(app: FastAPI):
         log.warning("Redis unavailable: %s", exc)
         app.state.redis = None
 
+    # Kafka producer used for authenticated operator commands.  Keep the
+    # gateway readable when Kafka is down, but never pretend a command was
+    # dispatched unless it was actually queued.
+    app.state.kafka_producer = None
+    try:
+        producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BOOTSTRAP)
+        await producer.start()
+        app.state.kafka_producer = producer
+        log.info("Kafka producer connected.")
+    except Exception as exc:
+        log.warning("Kafka producer unavailable: %s", exc)
+
     # Start Kafka → WebSocket broadcast
     app.state.ws_manager = ws_manager
     task = asyncio.create_task(
@@ -99,6 +112,8 @@ async def lifespan(app: FastAPI):
         await app.state.db.close()
     if app.state.redis:
         await app.state.redis.aclose()
+    if app.state.kafka_producer:
+        await app.state.kafka_producer.stop()
 
 
 app = FastAPI(
@@ -131,14 +146,35 @@ async def health():
 
 @app.get("/api/system/health")
 async def system_health():
+    import asyncio
+    import httpx
+
+    services = {
+        "forecasting": os.getenv("FORECASTING_SERVICE_URL", "http://forecasting:8001"),
+        "anomaly": os.getenv("ANOMALY_SERVICE_URL", "http://anomaly:8002"),
+        "rl_agent": os.getenv("RL_AGENT_SERVICE_URL", "http://rl-agent:8003"),
+        "demand_response": os.getenv("DR_SERVICE_URL", "http://demand-response:8004"),
+    }
+
+    async def check(name: str, base_url: str):
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get(f"{base_url}/health")
+            return name, {
+                "status": "ok" if response.is_success else "unhealthy",
+                "status_code": response.status_code,
+            }
+        except httpx.HTTPError as exc:
+            return name, {"status": "unavailable", "detail": str(exc)}
+
+    results = dict(await asyncio.gather(*(check(*item) for item in services.items())))
     return {
+        "status": "ok" if all(v["status"] == "ok" for v in results.values()) else "degraded",
         "gateway": "ok",
-        "services": {
-            "forecasting":      os.getenv("FORECASTING_SERVICE_URL"),
-            "anomaly":          os.getenv("ANOMALY_SERVICE_URL"),
-            "rl_agent":         os.getenv("RL_AGENT_SERVICE_URL"),
-            "demand_response":  os.getenv("DR_SERVICE_URL"),
-        },
+        "database": "ok" if app.state.db else "unavailable",
+        "redis": "ok" if app.state.redis else "unavailable",
+        "kafka": "ok" if app.state.kafka_producer else "unavailable",
+        "services": results,
     }
 
 

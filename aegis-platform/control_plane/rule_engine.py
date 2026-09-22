@@ -101,13 +101,41 @@ class RuleEngine:
         elif price and float(price) <= 0.05:
             self.transition("NORMAL_PRICE")
 
+    def process_manual_command(self, command: dict):
+        """Validate an operator command against the current grid state."""
+        device_id = command.get("device_id")
+        command_type = command.get("command_type")
+        try:
+            value_kw = float(command.get("value_kw", 0))
+        except (TypeError, ValueError):
+            log.warning("Rejected command with invalid value: %r", command)
+            return False
+
+        if not device_id or command_type not in ALLOWED_ACTIONS[self.state] or not 0 < value_kw <= 10_000:
+            log.warning(
+                "Rejected operator command in state %s: device=%r type=%r value=%r",
+                self.state, device_id, command_type, value_kw,
+            )
+            return False
+
+        notes = command.get("notes", "")
+        operator = command.get("operator", "unknown")
+        self.connector.send_command(
+            device_id,
+            command_type,
+            value_kw,
+            source="operator",
+            notes=f"Operator {operator}: {notes}",
+        )
+        return True
+
     def run(self):
         consumer = Consumer({
             "bootstrap.servers": KAFKA_BOOTSTRAP,
             "group.id":          "rule-engine",
             "auto.offset.reset": "latest",
         })
-        consumer.subscribe(["rl.actions", "anomaly.alerts"])
+        consumer.subscribe(["rl.actions", "anomaly.alerts", "control.commands"])
         log.info("Rule engine started. State: %s", self.state)
 
         try:
@@ -125,6 +153,8 @@ class RuleEngine:
                         self.process_rl_action(data)
                     elif msg.topic() == "anomaly.alerts":
                         self.process_anomaly_alert(data)
+                    elif msg.topic() == "control.commands":
+                        self.process_manual_command(data)
                 except Exception as exc:
                     log.exception("Rule engine processing error: %s", exc)
         finally:

@@ -53,8 +53,9 @@
 git clone <repo-url> aegis-platform
 cd aegis-platform
 
-# Copy environment file (already pre-filled with defaults)
-cp .env .env.local   # optionally edit secrets
+# Development defaults work without an environment file.
+# For production, copy the template and replace every placeholder:
+cp .env.example .env
 
 # Start all infrastructure + services
 docker compose up -d
@@ -104,8 +105,9 @@ The anomaly VAE trains automatically on first service start from the Parquet dat
 ```
 aegis-platform/
 ├── docker-compose.yml          # Full stack orchestration
-├── .env                        # Environment variables
+├── .env.example                # Production environment template
 ├── Makefile                    # Convenience targets
+├── artifacts/                  # Generated model metadata and weights
 ├── data/
 │   ├── generate_digital_twin.py  # Synthetic microgrid data generator
 │   └── processed/              # Parquet files (generated)
@@ -197,7 +199,9 @@ aegis-platform/
 
 ## 🔐 Authentication
 
-Operator endpoints (`/api/control/*`) require JWT authentication:
+Operator endpoints (`/api/control/*`) require JWT authentication. The demo
+credentials below are enabled only in development; production deployments must
+provision an operator in the `users` table and set a strong `JWT_SECRET`.
 
 ```bash
 # Get token (demo credentials)
@@ -209,6 +213,20 @@ curl -H "Authorization: Bearer <token>" \
   -X POST http://localhost:8000/api/control/manual \
   -H "Content-Type: application/json" \
   -d '{"device_id":"commercial_01","command_type":"discharge","value_kw":30}'
+```
+
+Manual commands are published to Kafka, checked against the control-plane state
+machine, and only then forwarded to the simulated device connector and audit log.
+
+---
+
+## Development checks
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+docker compose config --quiet
+cd frontend && npm ci && npm run build
 ```
 
 ---
@@ -257,7 +275,7 @@ jupyter notebook experiments.ipynb
 
 | Problem | Solution |
 |---------|----------|
-| Kafka not starting | Ensure `CLUSTER_ID` in `.env` matches the value in `docker-compose.yml` |
+| Kafka not starting | If `KAFKA_CLUSTER_ID` changed, recreate only the `kafka_data` volume and restart |
 | TimescaleDB init fails | Run `docker compose down -v` and `docker compose up -d` again |
 | Model not loaded (503) | Run `docker compose run --rm forecasting python train.py` first |
 | Frontend shows blank page | Wait for `api-gateway` to be healthy, then refresh |

@@ -1,7 +1,7 @@
 # ============================================================
 # AEGIS Makefile
 # ============================================================
-.PHONY: up down simulate train-all run-all logs clean help
+.PHONY: up down simulate train-all run-all logs test validate clean help
 
 ## Start all infrastructure + services
 up:
@@ -30,6 +30,15 @@ run-all:
 ## Follow logs for all services
 logs:
 	docker compose logs -f --tail=50
+
+## Run the Python test suite
+test:
+	python -m pytest
+
+## Validate Compose configuration and run tests
+validate:
+	docker compose config --quiet
+	python -m pytest
 
 ## Follow logs for a specific service: make log SERVICE=forecasting
 log:
@@ -60,6 +69,8 @@ help:
 	@echo "  make train-all     – Train all AI models"
 	@echo "  make run-all       – Start AI services + gateway (foreground)"
 	@echo "  make logs          – Follow all logs"
+	@echo "  make test          – Run the Python test suite"
+	@echo "  make validate      – Validate Compose and run tests"
 	@echo "  make generate-data – Run digital twin data generator only"
 	@echo "  make clean         – Remove all Docker volumes (destroys data)"
 	@echo "  make notebook      – Open research Jupyter notebook"

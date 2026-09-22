@@ -4,15 +4,15 @@ import os
 import json
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
-import httpx
 import asyncpg
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from routes.upstream import request_json
 
 log = logging.getLogger("control-routes")
 router = APIRouter(tags=["Control"])
@@ -52,7 +52,8 @@ async def get_current_user(token: str = Depends(oauth2)):
 
 
 def _demo_auth_enabled() -> bool:
-    return os.getenv("AEGIS_ALLOW_DEMO_AUTH", "false").lower() in {"1", "true", "yes"}
+    default = "true" if APP_ENV != "production" else "false"
+    return os.getenv("AEGIS_ALLOW_DEMO_AUTH", default).lower() in {"1", "true", "yes"}
 
 
 async def _authenticate_user(db: Optional[asyncpg.Pool], username: str, password: str) -> Optional[dict]:
@@ -97,23 +98,17 @@ class ActionRequest(BaseModel):
 
 @router.post("/control/rl-action")
 async def rl_action(body: ActionRequest, user: str = Depends(get_current_user)):
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(f"{RL_URL}/act", json=body.dict())
-    if r.status_code != 200:
-        raise HTTPException(r.status_code, r.text)
-    return r.json()
+    return await request_json("POST", f"{RL_URL}/act", timeout=15, json=body.model_dump())
 
 
 @router.post("/control/explain")
 async def explain(body: ActionRequest, user: str = Depends(get_current_user)):
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(f"{RL_URL}/explain", json=body.dict())
-    return r.json()
+    return await request_json("POST", f"{RL_URL}/explain", timeout=30, json=body.model_dump())
 
 
 class ManualCommandIn(BaseModel):
     device_id:    str
-    command_type: str   # charge | discharge | curtail | shed_load
+    command_type: Literal["charge", "discharge", "curtail", "shed_load"]
     value_kw:     float
     notes:        str = ""
 
@@ -124,19 +119,36 @@ async def manual_command(
     request: Request,
     user: str = Depends(get_current_user),
 ):
-    """Operator manual override."""
-    db: asyncpg.Pool = request.app.state.db
+    """Queue an authenticated operator command for control-plane validation."""
+    if body.value_kw <= 0 or body.value_kw > 10_000:
+        raise HTTPException(422, "value_kw must be greater than 0 and no more than 10000")
+
+    producer = getattr(request.app.state, "kafka_producer", None)
+    if producer is None:
+        raise HTTPException(503, "Control command bus is unavailable")
+
     now = datetime.now(timezone.utc).isoformat()
-    if db:
-        await db.execute(
-            """INSERT INTO control_log
-               (time, source, device_id, command_type, value, approved, safety_override, notes)
-               VALUES ($1,'operator',$2,$3,$4,TRUE,FALSE,$5)""",
-            now, body.device_id, body.command_type, body.value_kw,
-            f"Manual by {user}: {body.notes}",
+    payload = {
+        "time": now,
+        "device_id": body.device_id,
+        "command_type": body.command_type,
+        "value_kw": body.value_kw,
+        "source": "operator",
+        "operator": user,
+        "notes": body.notes,
+    }
+    try:
+        await producer.send_and_wait(
+            "control.commands",
+            json.dumps(payload).encode("utf-8"),
+            key=body.device_id.encode("utf-8"),
         )
-    log.info("Manual command by %s: %s %s @ %.1f kW", user, body.device_id, body.command_type, body.value_kw)
-    return {"status": "dispatched", "command": body.dict(), "operator": user, "time": now}
+    except Exception as exc:
+        log.exception("Failed to queue operator command: %s", exc)
+        raise HTTPException(503, "Unable to queue control command") from exc
+
+    log.info("Manual command queued by %s: %s %s @ %.1f kW", user, body.device_id, body.command_type, body.value_kw)
+    return {"status": "queued", "command": body.model_dump(), "operator": user, "time": now}
 
 
 @router.get("/control/status")
@@ -157,9 +169,7 @@ class DRIn(BaseModel):
 
 @router.post("/demand-response")
 async def demand_response(body: DRIn, user: str = Depends(get_current_user)):
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(f"{DR_URL}/demand_response", json=body.dict())
-    if r.status_code != 200:
-        raise HTTPException(r.status_code, r.text)
-    return r.json()
+    return await request_json(
+        "POST", f"{DR_URL}/demand_response", timeout=15, json=body.model_dump()
+    )
 

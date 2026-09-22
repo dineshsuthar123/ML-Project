@@ -2,6 +2,10 @@
 # AEGIS – Docker Compose (all free / open-source services)
 # ============================================================
 
+x-service-env: &service-env
+  - path: ./.env
+    required: false
+
 networks:
   aegis-net:
     driver: bridge
@@ -38,7 +42,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_LOG_DIRS: "/var/lib/kafka/data"
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}"
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
@@ -132,9 +136,12 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     entrypoint: ["/bin/sh", "-c"]
     command: >
-      "mc alias set local http://minio:9000 minioadmin minioadmin &&
+      "mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
        mc mb --ignore-existing local/aegis-models &&
        mc mb --ignore-existing local/aegis-data &&
        echo 'MinIO ready.'"
@@ -150,7 +157,7 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-    env_file: .env
+    env_file: *service-env
     environment:
       AEGIS_DATA_DIR: /app/data
     volumes: ["./data:/app/data"]
@@ -169,7 +176,7 @@ services:
         condition: service_healthy
       digital-twin:
         condition: service_completed_successfully
-    env_file: .env
+    env_file: *service-env
     volumes:
       - ./data:/app/data
     command: python sensor_simulator.py
@@ -184,7 +191,7 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    env_file: .env
+    env_file: *service-env
     volumes:
       - ./data:/app/data
     command: python stream_processors/feature_engineering.py
@@ -202,11 +209,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    env_file: .env
+    env_file: *service-env
     environment:
       AEGIS_DATA_DIR: /app/data
     volumes:
-      - "./backups/model_artifacts:/app/artifacts"
+      - "./artifacts:/app/artifacts"
       - "./data:/app/data"
     command: uvicorn serve:app --host 0.0.0.0 --port 8001
 
@@ -223,11 +230,11 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    env_file: .env
+    env_file: *service-env
     environment:
       AEGIS_DATA_DIR: /app/data
     volumes:
-      - "./backups/model_artifacts:/app/artifacts"
+      - "./artifacts:/app/artifacts"
       - "./data:/app/data"
     command: uvicorn serve:app --host 0.0.0.0 --port 8002
 
@@ -244,11 +251,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    env_file: .env
+    env_file: *service-env
     environment:
       AEGIS_DATA_DIR: /app/data
     volumes:
-      - "./backups/model_artifacts:/app/artifacts"
+      - "./artifacts:/app/artifacts"
       - "./data:/app/data"
     command: uvicorn policy_server:app --host 0.0.0.0 --port 8003
 
@@ -260,8 +267,26 @@ services:
     container_name: aegis-demand-response
     networks: [aegis-net]
     ports: ["8004:8004"]
-    env_file: .env
+    env_file: *service-env
     command: uvicorn serve:app --host 0.0.0.0 --port 8004
+
+  # ── Safety Control Plane ───────────────────────────────────
+  control-plane:
+    build:
+      context: ./control_plane
+      dockerfile: Dockerfile
+    container_name: aegis-control-plane
+    networks: [aegis-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: *service-env
+    restart: unless-stopped
+    command: python rule_engine.py
 
   # ── API Gateway ────────────────────────────────────────────
   api-gateway:
@@ -278,7 +303,7 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    env_file: .env
+    env_file: *service-env
     command: uvicorn main:app --host 0.0.0.0 --port 8000
 
   # ── Frontend ───────────────────────────────────────────────

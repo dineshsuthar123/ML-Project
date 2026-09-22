@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.test-tmp/
 .ruff_cache/
 node_modules/
 dist/
@@ -10,11 +11,11 @@ coverage/
 .coverage
 htmlcov/
 *.log
-backups/model_artifacts/*.pt
-backups/model_artifacts/*.pkl
-backups/model_artifacts/*.zip
-backups/model_artifacts/forecaster_meta.json
-backups/model_artifacts/baseline_rf_meta.json
-backups/model_artifacts/checkpoints/
-backups/model_artifacts/tb_logs/
+artifacts/*.pt
+artifacts/*.pkl
+artifacts/*.zip
+artifacts/forecaster_meta.json
+artifacts/baseline_rf_meta.json
+artifacts/checkpoints/
+artifacts/tb_logs/
 data/processed/*.parquet

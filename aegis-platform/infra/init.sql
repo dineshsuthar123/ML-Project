@@ -100,10 +100,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Insert default admin user (password: admin123)
-INSERT INTO users (username, password_hash, role)
-VALUES ('admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKAQnCKAtDpLGQi', 'admin')
-ON CONFLICT (username) DO NOTHING;
+-- Development login is provided by the gateway only when APP_ENV is not
+-- production (or AEGIS_ALLOW_DEMO_AUTH is explicitly enabled). Production
+-- operators must be provisioned with an application-generated bcrypt hash.
 
 COMMENT ON TABLE grid_readings IS 'Real-time sensor telemetry from simulated microgrid nodes';
 COMMENT ON TABLE forecast_results IS 'Probabilistic load/generation forecasts (quantiles)';

@@ -95,8 +95,8 @@ class DeviceConnector:
             except Exception as exc:
                 log.warning("Redis write failed: %s", exc)
 
-        # Async DB insert via run_in_executor
-        asyncio.get_event_loop().run_until_complete(self._db_insert(payload))
+        # The connector runs in a synchronous Kafka consumer process.
+        asyncio.run(self._db_insert(payload))
 
     async def _db_insert(self, payload: dict):
         try:
